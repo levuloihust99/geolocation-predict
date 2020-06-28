@@ -1,0 +1,8 @@
+pandas
+tensorflow
+numpy
+matplotlib
+seaborn
+pyvi
+gensim
+scikit-learn
