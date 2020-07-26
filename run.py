@@ -1,5 +1,5 @@
 import pandas as pd
-from model import getGeoPredictModel, getTextBasedModel
+from model import getGeoPredictModel, getContextModel
 import tensorflow as tf
 import json
 import numpy as np
@@ -13,14 +13,6 @@ import seaborn as sns
 import argparse
 import re
 import pickle
-
-def load_tfidfvecs(fname):
-   tfidfvecs = pd.read_csv(fname, header=None).iloc[:, 1:].values.astype('float32')
-   return tfidfvecs
-
-def load_docvecs(fname):
-    docvecs = pd.read_csv(fname, header=None).iloc[:, 1:].values.astype('float32')
-    return docvecs
 
 def str2opt(name, learning_rate):
     assert isinstance(learning_rate, float)
@@ -41,8 +33,8 @@ if __name__ == "__main__":
     print("Parsing ...")
 
     parser = argparse.ArgumentParser(description="Provide appropriate parameters to choose running mode")
-    parser.add_argument("--textbased-only", "-tx", default=False, type=eval,
-                        help="whether to use text-based only model or multi-view model")
+    parser.add_argument("--context-only", "-ct", default=False, type=eval,
+                        help="whether to use context-only model or multi-view model")
     parser.add_argument("--from-scratch", "-f", required=True, type=eval,
                         help="True if training model from scratch, False otherwise")
     parser.add_argument("--process-input", "-p", default=False, type=eval,
@@ -50,14 +42,14 @@ if __name__ == "__main__":
     parser.add_argument("--docvec-pretrain", "-d", default=False, type=eval,
                         help="whether to use pretrain doc2vec model, default=False, only use when process_input=True")
     parser.add_argument("--learning-rate", "-lr", default=0.01, type=eval,
-                        help="learning rate of the optimizer, default=0.1")
+                        help="learning rate of the optimizer, default=0.01")
     parser.add_argument("--optimizer", "-o", default='SGD',
                         help="optimizer to optimize the model, default='SGD'")
-    parser.add_argument("--epochs", default=20, type=int,
-                        help="number of epochs when training model")
+    parser.add_argument("--epochs", default=10, type=int,
+                        help="number of epochs when training model, default=10")
     args = parser.parse_args()
 
-    textbased_only = args.textbased_only
+    context_only = args.context_only
     from_scratch = args.from_scratch
     process_input = args.process_input
     docvec_pretrain = args.docvec_pretrain
@@ -117,10 +109,10 @@ if __name__ == "__main__":
     end = int(round(time.time() * 1000))
     print("Compute labels done! - Elapsed time: %d" % (end - begin))
 
-    if not textbased_only:
+    if not context_only:
         checkpoint_dir = "pretrained/multiview/"
     else:
-        checkpoint_dir = "pretrained/textbased/"
+        checkpoint_dir = "pretrained/context/"
 
     callback = tf.keras.callbacks.ModelCheckpoint(
         filepath="{0}{1}-".format(checkpoint_dir, date.today()) + "-accuracy:{val_accuracy:.4f}.hdf5",
@@ -133,7 +125,7 @@ if __name__ == "__main__":
 
     from_scratch = args.from_scratch
     if from_scratch:
-        if not textbased_only:
+        if not context_only:
             tfidf_dim = train_tfidfvecs.shape[-1]
             docvec_dim = train_docvecs.shape[-1]
             model = getGeoPredictModel(tfidf_input_dim=tfidf_dim, doc2vec_input_dim=docvec_dim, tfidf_hidden_dim=150, doc2vec_hidden_dim=30, output_dim=63)
@@ -143,16 +135,16 @@ if __name__ == "__main__":
                       batch_size=10, callbacks=[callback], validation_data=(test_dataset['inputs'], *test_dataset['outputs']))
         else:
             docvec_dim = train_docvecs.shape[-1]
-            model = getTextBasedModel(doc2vec_input_dim=docvec_dim, doc2vec_hidden_dim=30, output_dim=63)
+            model = getContextModel(doc2vec_input_dim=docvec_dim, doc2vec_hidden_dim=30, output_dim=63)
             model.compile(optimizer=optimizer, loss=tf.keras.losses.CategoricalCrossentropy(from_logits=False),
                           metrics=['accuracy'])
-            model.fit(*train_dataset['inputs'], *train_dataset['outputs'], epochs=epochs,
-                      batch_size=10, callbacks=[callback], validation_data=(*test_dataset['inputs'], *test_dataset['outputs']))
+            model.fit(train_docvecs, *train_dataset['outputs'], epochs=epochs,
+                      batch_size=10, callbacks=[callback], validation_data=(test_docvecs, *test_dataset['outputs']))
     else:
-        if not textbased_only:
+        if not context_only:
             prefix = "./pretrained/multiview/"
         else:
-            prefix = "./pretrained/textbased/"
+            prefix = "./pretrained/context/"
         list_files = glob.glob("{}*".format(prefix))
 
         fnames_acc = []

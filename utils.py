@@ -31,7 +31,7 @@ class Split(object):
         self.path = path
 
     def hold_out(self, ratio=0.2):
-        datadf = pd.read_csv(self.path + "filter_data.csv", header=0)
+        datadf = pd.read_csv(self.path + "data.csv", header=0)
         batch_size = datadf.shape[0]
         idxs = np.arange(batch_size)
         test_size = int(batch_size * ratio)
@@ -57,3 +57,7 @@ class Split(object):
         docvecs_train.to_csv("dataset/processed_data/train/docvecs.csv", header=False, index=False)
         docvecs_test = docvecs.iloc[test_idxs, :]
         docvecs_test.to_csv("dataset/processed_data/test/docvecs.csv", header=False, index=False)
+
+if __name__ == "__main__":
+    split = Split()
+    split.hold_out()
