@@ -1,5 +1,5 @@
 import pandas as pd
-from model import getGeoPredictModel
+from model import getGeoPredictModel, getTextBasedModel
 import tensorflow as tf
 import json
 import numpy as np
@@ -7,11 +7,12 @@ import time
 from datetime import datetime, date
 import glob
 import os
-from utils import Split
+import utils
 from matplotlib import pyplot as plt
 import seaborn as sns
 import argparse
 import re
+import pickle
 
 def load_tfidfvecs(fname):
    tfidfvecs = pd.read_csv(fname, header=None).iloc[:, 1:].values.astype('float32')
@@ -40,17 +41,15 @@ if __name__ == "__main__":
     print("Parsing ...")
 
     parser = argparse.ArgumentParser(description="Provide appropriate parameters to choose running mode")
+    parser.add_argument("--textbased-only", "-tx", default=False, type=eval,
+                        help="whether to use text-based only model or multi-view model")
     parser.add_argument("--from-scratch", "-f", required=True, type=eval,
                         help="True if training model from scratch, False otherwise")
     parser.add_argument("--process-input", "-p", default=False, type=eval,
                         help="whether to perform transformation from raw text data to vector, default=True")
     parser.add_argument("--docvec-pretrain", "-d", default=False, type=eval,
                         help="whether to use pretrain doc2vec model, default=False, only use when process_input=True")
-    parser.add_argument("--visualize", "-v", default=False, type=eval,
-                        help="whether to visualize the label distribution before and after splitting the dataset, default=False")
-    parser.add_argument("--ratio", "-t", default=0.2, type=eval,
-                        help="fraction of test set in the dataset, default=0.2")
-    parser.add_argument("--learning-rate", "-lr", default=0.1, type=eval,
+    parser.add_argument("--learning-rate", "-lr", default=0.01, type=eval,
                         help="learning rate of the optimizer, default=0.1")
     parser.add_argument("--optimizer", "-o", default='SGD',
                         help="optimizer to optimize the model, default='SGD'")
@@ -58,11 +57,10 @@ if __name__ == "__main__":
                         help="number of epochs when training model")
     args = parser.parse_args()
 
+    textbased_only = args.textbased_only
     from_scratch = args.from_scratch
     process_input = args.process_input
     docvec_pretrain = args.docvec_pretrain
-    visualize = args.visualize
-    ratio=args.ratio
     learning_rate = args.learning_rate
     optimizer = str2opt(args.optimizer, learning_rate)
     epochs = args.epochs
@@ -80,8 +78,9 @@ if __name__ == "__main__":
         docvec_pretrain = args.docvec_pretrain
         print("Loading text data ...")
         uids, corpus = data_process.load_corpus()
-        print("Learning tfidf feature ...")
-        data_process.compute_tfidf_feature(uids, corpus)
+        if not textbased_only:
+            print("Learning tfidf feature ...")
+            data_process.compute_tfidf_feature(uids, corpus)
         if not docvec_pretrain:
             print("Learning Doc2Vec feature ...")
             data_process.compute_docvec_feature(uids, corpus)
@@ -101,66 +100,28 @@ if __name__ == "__main__":
     # load pre-processed data
     begin = int(round(time.time() * 1000))
     print("Loading pre-processed data ...")
-    tfidfvecs_fname = "dataset/processed_data/tfidfvecs.csv"
-    docvecs_fname = "dataset/processed_data/docvecs.csv"
-    tfidfvecs = load_docvecs(tfidfvecs_fname)
-    docvecs = load_docvecs(docvecs_fname)
-    end = int(round(time.time() * 1000))
-    print("Load data done! - Elapsed time: %d" % (end - begin))
-
-    # compute labels
-    begin = int(round(time.time() * 1000))
-    filter_data_fname = "dataset/textdata/filter_data.csv"
-    data_df = pd.read_csv(filter_data_fname, header=0)
-    labels = []
-
-    raw2true= {}
-    raw2true_df = pd.read_csv("handtagged/place_mapping.csv", header=0)
-    for i in range(raw2true_df.shape[0]):
-        raw2true[raw2true_df.loc[i, "Raw_place"]] = raw2true_df.loc[i, "True_place"]
-    with open("place2int.json", "r") as fp:
-        place2int = json.load(fp)
-
-    for i in range(data_df.shape[0]):
-        label = raw2true[data_df.loc[i, "Place"]]
-        labels.append(place2int[label])
-
-    labels = np.array(labels)
-    onehot_labels = np.zeros((labels.shape[0], 63), dtype='float32')
-    onehot_labels[np.arange(labels.shape[0]), labels - 1] = 1
+    train_tfidfvecs = utils.load_vecs("dataset/processed_data/train/tfidfvecs.csv")
+    test_tfidfvecs = utils.load_vecs("dataset/processed_data/test/tfidfvecs.csv")
+    train_docvecs = utils.load_vecs("dataset/processed_data/train/docvecs.csv")
+    test_docvecs = utils.load_vecs("dataset/processed_data/test/docvecs.csv")
+    train_labels = utils.compute_labels("dataset/textdata/train/data.csv")
+    test_labels = utils.compute_labels("dataset/textdata/test/data.csv")
+    train_dataset = {
+        'inputs': [train_tfidfvecs, train_docvecs],
+        'outputs': [train_labels]
+    }
+    test_dataset = {
+        'inputs': [test_tfidfvecs, test_docvecs],
+        'outputs': [test_labels]
+    }
     end = int(round(time.time() * 1000))
     print("Compute labels done! - Elapsed time: %d" % (end - begin))
 
-    # split train test
-    begin = int(round(time.time() * 1000))
-    split = Split(tfidfvecs=tfidfvecs, docvecs=docvecs, labels=onehot_labels, ratio=0.2)
-    train_dataset, test_dataset = split.hold_out()
-    end = int(round(time.time() * 1000))
-    print("Split train test done! - Elapsed time: %d" % (end - begin))
+    if not textbased_only:
+        checkpoint_dir = "pretrained/multiview/"
+    else:
+        checkpoint_dir = "pretrained/textbased/"
 
-    # visualize label distribution
-    if visualize:
-        begin = int(round(time.time() * 1000))
-
-        # Draw label distribution before splitting
-        bef_fig = plt.figure(figsize=(12, 5), num="Prior label distribution")
-        chart = bef_fig.add_subplot()
-        sns.distplot(labels, ax=chart)
-
-        # Draw label distribution after splitting
-        aft_fig = plt.figure(figsize=(12, 5), num="Posterior label distribution")
-        chart = aft_fig.add_subplot()
-        train_size = train_dataset["outputs"].shape[0]
-        aft_labels = np.zeros(train_size)
-
-        for i in range(train_size):
-            idx = np.where(train_dataset["outputs"][i] == 1.0)[0][0] + 1
-            aft_labels[i] = idx
-        sns.distplot(aft_labels, ax=chart)
-
-        plt.show()
-
-    checkpoint_dir = "pretrained/"
     callback = tf.keras.callbacks.ModelCheckpoint(
         filepath="{0}{1}-".format(checkpoint_dir, date.today()) + "-accuracy:{val_accuracy:.4f}.hdf5",
         save_weights_only=False,
@@ -172,16 +133,28 @@ if __name__ == "__main__":
 
     from_scratch = args.from_scratch
     if from_scratch:
-        tfidf_dim = tfidfvecs.shape[-1]
-        docvec_dim = docvecs.shape[-1]
-        model = getGeoPredictModel(tfidf_input_dim=tfidf_dim, doc2vec_input_dim=docvec_dim, tfidf_hidden_dim=150, doc2vec_hidden_dim=30, output_dim=63)
-        model.compile(optimizer=optimizer, loss=tf.keras.losses.CategoricalCrossentropy(from_logits=False),
-                      metrics=['accuracy'])
-        model.fit(train_dataset['inputs'], train_dataset['outputs'], epochs=epochs,
-                  batch_size=10, callbacks=[callback], validation_data=(test_dataset['inputs'], test_dataset['outputs']))
+        if not textbased_only:
+            tfidf_dim = train_tfidfvecs.shape[-1]
+            docvec_dim = train_docvecs.shape[-1]
+            model = getGeoPredictModel(tfidf_input_dim=tfidf_dim, doc2vec_input_dim=docvec_dim, tfidf_hidden_dim=150, doc2vec_hidden_dim=30, output_dim=63)
+            model.compile(optimizer=optimizer, loss=tf.keras.losses.CategoricalCrossentropy(from_logits=False),
+                          metrics=['accuracy'])
+            model.fit(train_dataset['inputs'], *train_dataset['outputs'], epochs=epochs,
+                      batch_size=10, callbacks=[callback], validation_data=(test_dataset['inputs'], *test_dataset['outputs']))
+        else:
+            docvec_dim = train_docvecs.shape[-1]
+            model = getTextBasedModel(doc2vec_input_dim=docvec_dim, doc2vec_hidden_dim=30, output_dim=63)
+            model.compile(optimizer=optimizer, loss=tf.keras.losses.CategoricalCrossentropy(from_logits=False),
+                          metrics=['accuracy'])
+            model.fit(*train_dataset['inputs'], *train_dataset['outputs'], epochs=epochs,
+                      batch_size=10, callbacks=[callback], validation_data=(*test_dataset['inputs'], *test_dataset['outputs']))
     else:
-        list_files = glob.glob("./pretrained/*")
-        # model_path = max(list_files, key=os.path.getctime)
+        if not textbased_only:
+            prefix = "./pretrained/multiview/"
+        else:
+            prefix = "./pretrained/textbased/"
+        list_files = glob.glob("{}*".format(prefix))
+
         fnames_acc = []
         for file in list_files:
             fname_acc = re.findall(r"([\d\.]+)\.hdf5", file)
@@ -191,14 +164,15 @@ if __name__ == "__main__":
         model_path = None
         for file in list_files:
             fname_acc = re.findall(r"([\d\.]+)\.hdf5", file)
-            if fname_acc == max_acc:
+            fname_acc = float(fname_acc[0])
+            if fname_acc == float(max_acc):
                 model_path = file
 
         assert model_path is not None
 
         model = tf.keras.models.load_model(model_path)
-        model.fit(train_dataset['inputs'], train_dataset['outputs'], epochs=epochs,
-                  batch_size=64, callbacks=[callback], validation_data=(test_dataset['inputs'], test_dataset['outputs']))
+        model.fit(train_dataset['inputs'], *train_dataset['outputs'], epochs=epochs,
+                  batch_size=10, callbacks=[callback], validation_data=(test_dataset['inputs'], *test_dataset['outputs']))
 
     end = int(round(time.time() * 1000))
     print("Train model done! - Elapsed time: %d" % (end - begin))

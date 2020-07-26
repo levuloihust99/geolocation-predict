@@ -2,6 +2,7 @@ import pandas as pd
 from pyvi import ViTokenizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+import json
 
 def load_corpus():
     """return a corpus or a collection of documents, along with userID of each document. """
@@ -28,6 +29,9 @@ def compute_tfidf_feature(uids, corpus):
     # and build the vocabulary with max size equal to 10000
     vectorizer = TfidfVectorizer(max_df=0.5, max_features=10000)
     tfidfvecs = vectorizer.fit_transform(corpus)
+    vocabulary = vectorizer.vocabulary_
+    with open("vocabulary.json", "w") as fw:
+        json.dump(vocabulary, fw)
     tfidfvecs = pd.DataFrame(tfidfvecs.toarray())
     uids = pd.Series(uids)
     compact = pd.concat([uids, tfidfvecs], axis=1)

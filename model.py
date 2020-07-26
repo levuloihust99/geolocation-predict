@@ -36,3 +36,12 @@ def getGeoPredictModel(tfidf_input_dim, doc2vec_input_dim, tfidf_hidden_dim, doc
     softmax = tf.keras.layers.Softmax(axis=-1)(dense)
     model = tf.keras.Model(inputs=[tfidfvecs, docvecs], outputs=softmax)
     return model
+
+def getTextBasedModel(doc2vec_input_dim, doc2vec_hidden_dim, output_dim):
+    docvecs = tf.keras.Input(shape=(doc2vec_input_dim,))
+    docvec_hidden = tf.keras.layers.Dense(units=doc2vec_hidden_dim)(docvecs)
+    relu = tf.keras.layers.ReLU()(docvec_hidden)
+    dense = tf.keras.layers.Dense(units=output_dim)(relu)
+    softmax = tf.keras.layers.Softmax(axis=-1)(dense)
+    model = tf.keras.Model(inputs=docvecs, outputs=softmax)
+    return model

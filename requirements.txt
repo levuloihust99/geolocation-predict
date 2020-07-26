@@ -6,3 +6,4 @@ seaborn
 pyvi
 gensim
 scikit-learn
+requests
